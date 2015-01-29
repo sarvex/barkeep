@@ -23,6 +23,7 @@ require "environment"
 require "lib/ruby_extensions"
 require "lib/git_helper"
 require "lib/git_diff_utils"
+require "lib/oauth2_providers/google_oauth2"
 require "lib/keyboard_shortcuts"
 require "lib/meta_repo"
 require "lib/pretty_date"
@@ -40,12 +41,11 @@ require "resque_jobs/deliver_review_request_emails.rb"
 
 NODE_MODULES_BIN_PATH = "./node_modules/.bin"
 OPENID_AX_EMAIL_SCHEMA = "http://axschema.org/contact/email"
-UNAUTHENTICATED_ROUTES = ["/signin", "/signout", "/inspire", "/statusz", "/api/"]
+UNAUTHENTICATED_ROUTES = ["/signin", "/signout", "/inspire", "/statusz", "/api/", "/oauth2callback"]
 # NOTE(philc): Currently we let you see previews of individual commits and the code review stats without
 # being logged in, as a friendly UX. When we flesh out our auth model, we should intentionally make this
 # configurable.
 UNAUTHENTICATED_PREVIEW_ROUTES = ["/commits/", "/stats"]
-
 
 # OPENID_PROVIDERS is a string env variable. It's a comma-separated list of OpenID providers.
 OPENID_PROVIDERS_ARRAY = OPENID_PROVIDERS.split(",")
@@ -200,10 +200,23 @@ class BarkeepServer < Sinatra::Base
 
       # Save url to return to it after login completes.
       session[:login_started_url] = request.url
-      redirect(OPENID_PROVIDERS_ARRAY.size == 1 ?
-         get_openid_login_redirect(OPENID_PROVIDERS_ARRAY.first) :
-        "/signin/select_openid_provider")
+      redirect(GoogleOAuth2::generate_oauth_url())
+      # redirect(OPENID_PROVIDERS_ARRAY.size == 1 ?
+      #    get_openid_login_redirect(OPENID_PROVIDERS_ARRAY.first) :
+      #   "/signin/select_openid_provider")
     end
+  end
+
+  get "/oauth2callback" do
+    email = GoogleOAuth2::fetch_email(params["code"])
+
+    session[:email] = email
+    unless User.find(:email => email)
+      # If there are no admin users yet, make the first user to log in the first admin.
+      permission = User.find(:permission => "admin").nil? ? "admin" : "normal"
+      User.new(:email => email, :name => email, :permission => permission).save
+    end
+    redirect session[:login_started_url] || "/"
   end
 
   get("/favicon.ico") { redirect asset_url("favicon.ico") }
